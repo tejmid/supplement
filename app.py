@@ -356,7 +356,7 @@ html, body, .stApp, .stMarkdown, p, label, input, button, textarea{
 [data-testid="stExpander"]{background:#fff;border:1px solid #DCE8F8;border-radius:12px;}
 [data-testid="stExpander"] summary{font-size:16px;font-weight:600;}
 input{font-size:16px !important;}
-</style>
+.st-key-sample button{width:auto !important;min-height:0 !important;padding:0 !important;border:none !important;background:transparent !important;color:#2563EB !important;font-size:14px !important;font-weight:500 !important;text-decoration:underline;box-shadow:none !important;}</style>
 """
 
 
@@ -404,8 +404,7 @@ f = st.file_uploader("Upload your report", type=["pdf", "png", "jpg", "jpeg"],
                      label_visibility="collapsed")
 st.markdown('<div class="quiet">Your report is read once to pull out the values. This app does not save it.</div>',
             unsafe_allow_html=True)
-if st.button("Try a sample report"):
-    st.session_state["use_sample"] = True
+if st.button("No report handy? Try a sample report", key="sample"):    st.session_state["use_sample"] = True
 
 st.session_state.setdefault("cache", {})
 source, data_dict, read_error = None, None, None
