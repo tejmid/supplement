@@ -1,7 +1,8 @@
 import io, json, os, time
+import requests
 import streamlit as st
 from pypdf import PdfReader, PdfWriter
-from sarvamai import SarvamAI
+
 
 def get_key(name):
     try:
@@ -9,11 +10,14 @@ def get_key(name):
     except Exception:
         return os.environ.get(name)
 
+
 def num(desc):
     return {"type": "number", "description": desc}
 
+
 def txt(desc):
     return {"type": "string", "description": desc}
+
 
 SCHEMA = {"type": "object", "properties": {
     "patient_age_years": num("Patient age in years from the patient name line, e.g. 35 from (35Y/M)"),
@@ -29,6 +33,7 @@ SCHEMA = {"type": "object", "properties": {
     "egfr_value": num("Result value of EST. GLOMERULAR FILTRATION RATE (eGFR), digits only"),
     "egfr_unit": txt("Unit printed next to eGFR, exactly as printed"),
 }}
+
 
 def slim_pdf(data):
     """Keep only the pages with the values we need. Falls back to the first 10 pages."""
@@ -53,6 +58,41 @@ def slim_pdf(data):
     w.write(buf)
     return buf.getvalue(), len(keep[:10])
 
+
+API = "https://api.sarvam.ai/doc-ai/v1/job"
+
+
+def sarvam_extract(name, data, mime, timeout=150):
+    h = {"api-subscription-key": get_key("SARVAM_API_KEY") or ""}
+    r = requests.post(
+        f"{API}/extract", headers=h,
+        files={"file": (name, data, mime)},
+        data={"schema": json.dumps(SCHEMA), "language": "en-IN",
+              "output_format": "json", "mode": "basic"},
+        timeout=60)
+    if r.status_code >= 400:
+        raise RuntimeError(f"submit {r.status_code}: {r.text[:500]}")
+    job_id = r.json()["job_id"]
+    t0 = time.time()
+    status, s = "", None
+    while time.time() - t0 < timeout:
+        s = requests.get(f"{API}/{job_id}/status", headers=h, timeout=30)
+        if s.status_code >= 400:
+            raise RuntimeError(f"status {s.status_code}: {s.text[:500]}")
+        status = str(s.json().get("status", "")).lower()
+        if status in ("completed", "partially_completed", "failed", "rejected"):
+            break
+        time.sleep(3)
+    else:
+        raise RuntimeError("timed out waiting for the job")
+    if status not in ("completed", "partially_completed"):
+        raise RuntimeError(f"job {status}: {s.text[:500]}")
+    res = requests.get(f"{API}/{job_id}/results", headers=h, timeout=30)
+    if res.status_code >= 400:
+        raise RuntimeError(f"results {res.status_code}: {res.text[:500]}")
+    return status, res.json()
+
+
 st.title("Report reader test")
 f = st.file_uploader("Upload a blood report (PDF, PNG, JPG)", type=["pdf", "png", "jpg", "jpeg"])
 
@@ -62,24 +102,11 @@ if f and st.button("Read report"):
         data, pages = slim_pdf(data)
         mime = "application/pdf"
     st.write("Pages sent:", pages)
-    client = SarvamAI(api_subscription_key=get_key("SARVAM_API_KEY"))
     t0 = time.time()
     try:
-        job = client.doc_ai.extract(
-            file=[(f.name, io.BytesIO(data), mime)],
-            schema=json.dumps(SCHEMA), language="en-IN",
-            output_format="json", mode="basic")
         with st.spinner("Reading..."):
-            while True:
-                s = client.doc_ai.get_status(job_id=job.job_id)
-                if s.status.lower() in {"completed", "partially_completed", "failed", "rejected"}:
-                    break
-                if time.time() - t0 > 150:
-                    break
-                time.sleep(3)
-        st.write("Status:", s.status, "| seconds:", round(time.time() - t0, 1))
-        if s.status.lower() in ("completed", "partially_completed"):
-            res = client.doc_ai.get_results(job_id=job.job_id)
-            st.write(res.result)
+            status, out = sarvam_extract(f.name, data, mime)
+        st.write("Status:", status, "| seconds:", round(time.time() - t0, 1))
+        st.write(out.get("result", out))
     except Exception as e:
-        st.error(str(e)[:600])
+        st.error(str(e)[:800])
